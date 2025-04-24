@@ -122,68 +122,6 @@ import seaborn as sns
 from wordcloud import WordCloud
 from sklearn.metrics import confusion_matrix
 
-# 1. Review Distribution (Sentiment Pie Chart)
-plt.figure(figsize=(8, 6))
-df['sentiment'].value_counts().plot.pie(
-    autopct='%1.1f%%',
-    colors=['#ff9999','#66b3ff'],
-    labels=['Negative (0)', 'Positive (1)']
-)
-plt.title('Distribution of Sentiments')
-plt.ylabel('')
-plt.show()
-
-# 2. Word Frequency Analysis
-def generate_wordcloud(texts, title):
-    wordcloud = WordCloud(
-        width=800,
-        height=400,
-        background_color='white',
-        colormap='viridis'
-    ).generate(' '.join(texts))
-
-    plt.figure(figsize=(10, 5))
-    plt.imshow(wordcloud, interpolation='bilinear')
-    plt.title(title)
-    plt.axis('off')
-    plt.show()
-
-# Word clouds for positive and negative reviews
-generate_wordcloud(
-    df[df['sentiment'] == 1]['Описание'],
-    'Frequent Words in Positive Reviews'
-)
-generate_wordcloud(
-    df[df['sentiment'] == 0]['Описание'],
-    'Frequent Words in Negative Reviews'
-)
-
-# 3. Confusion Matrix (if you have true labels)
-# Assuming you have a 'true_sentiment' column with ground truth
-if 'true_sentiment' in df.columns:
-    cm = confusion_matrix(df['true_sentiment'], df['sentiment'])
-    plt.figure(figsize=(6, 6))
-    sns.heatmap(
-        cm,
-        annot=True,
-        fmt='d',
-        cmap='Blues',
-        xticklabels=['Predicted Negative', 'Predicted Positive'],
-        yticklabels=['Actual Negative', 'Actual Positive']
-    )
-    plt.title('Sentiment Analysis Confusion Matrix')
-    plt.show()
-
-    # Print classification report
-    print(classification_report(df['true_sentiment'], df['sentiment']))
-else:
-    print("No ground truth labels ('true_sentiment') available for confusion matrix")
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-from wordcloud import WordCloud
-from sklearn.metrics import confusion_matrix
-
 plt.figure(figsize=(8, 6))
 new_df['Решение'].value_counts().plot.pie(
     autopct='%1.1f%%',
