@@ -1,0 +1,713 @@
+import logging
+from datetime import datetime
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ConversationHandler,
+    ContextTypes,
+)
+
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Состояния разговора
+(
+    NAME, AGE, MEDICATION, DIAGNOSIS,
+    TEST_QUESTIONS, SHARE_EXPERIENCE,
+    TEST_PANIC_QUESTIONS,
+    CHOOSE_FIELD, EDIT_NAME, EDIT_AGE,
+    EDIT_MEDICATION, EDIT_DIAGNOSIS
+) = range(12)
+
+TEST_TOTAL = 5
+PANIC_TEST_TOTAL = 5
+
+# Главное меню
+main_menu = ReplyKeyboardMarkup(
+    [
+        ["Рассказать о себе", "Пройти тест уровня стресса"],
+        ["Мои результаты уровня стресса", "Выговориться"],
+        ["Срочная помощь", "Горячая линия"]
+    ],
+    resize_keyboard=True
+)
+
+# Меню управления данными
+edit_data_menu = ReplyKeyboardMarkup(
+    [
+        ["Изменить данные", "Сбросить данные"],
+        ["Вернуться в меню"]
+    ],
+    resize_keyboard=True
+)
+
+# Меню выбора поля для изменения
+choose_field_menu = ReplyKeyboardMarkup(
+    [
+        ["Имя", "Возраст"],
+        ["Препараты", "Диагнозы"],
+        ["Вернуться в меню"]
+    ],
+    resize_keyboard=True
+)
+
+# Клавиатура после теста
+result_keyboard = ReplyKeyboardMarkup(
+    [
+        ["Расскажи побольше", "Выговориться"],
+        ["Вернуться в меню"]
+    ],
+    resize_keyboard=True
+)
+
+# Клавиатура для выбора возраста
+age_keyboard = ReplyKeyboardMarkup(
+    [["12-18", "19-25", "26-35", "36-45", "46-60"]],
+    resize_keyboard=True
+)
+
+# Клавиатура для ответов Да/Нет
+yes_no_keyboard = ReplyKeyboardMarkup([["Да", "Нет"]], resize_keyboard=True)
+
+# Клавиатура для ответов на тест
+test_keyboard = ReplyKeyboardMarkup(
+    [["Никогда", "Редко", "Иногда", "Часто", "Постоянно"]],
+    resize_keyboard=True
+)
+
+# Вопросы теста на стресс
+TEST = [
+    "1. Чувствуете мышечное напряжение?",
+    "2. Беспокоят головные боли?",
+    "3. Есть проблемы со сном?",
+    "4. Чувствуете беспричинную усталость?",
+    "5. Раздражаетесь по мелочам?"
+]
+
+# Вопросы теста на панические атаки
+PANIC_TEST = [
+    "1. Испытывали ли вы внезапный сильный страх или дискомфорт в последнее время?",
+    "2. Было ли у вас учащенное сердцебиение или пульс?",
+    "3. Ощущали ли вы дрожь или тремор?",
+    "4. Была ли у вас одышка или чувство удушья?",
+    "5. Чувствовали ли вы боль или дискомфорт в груди?"
+]
+
+# Базовые советы по стрессу
+STRESS_ADVICE = {
+    "low": "✅ Низкий уровень стресса (0-5 баллов)",
+    "medium": "⚠️ Умеренный уровень стресса (6-10 баллов)",
+    "high": "🔥 Высокий уровень стресса (11-15 баллов)",
+    "critical": "🚨 Критический уровень стресса (16-20 баллов)"
+}
+
+# Подробные инструкции по стрессу
+EXTENDED_ADVICE = {
+    "low": (
+        "🔍 Простые ежедневные практики:\n\n"
+        "1. 📝 «3 хороших события» (2 минуты перед сном):\n"
+        "   - Запишите 3 приятных момента дня\n"
+        "   - Напишите, как вы к ним причастны\n"
+        "   Пример: «Коллега улыбнулся — я первый поздоровался»\n\n"
+        "2. 🚶 «Осознанная прогулка» (5 минут):\n"
+        "   - Идите медленно, считая шаги\n"
+        "   - На каждом вдохе говорите «спокойствие»\n"
+        "   - На выдохе — «расслабление»"
+    ),
+    "medium": (
+        "🔍 Техники при напряжении:\n\n"
+        "1. 🌬️ «Дыхание 5-5-5» (3 минуты):\n"
+        "   - Сядьте прямо, рука на животе\n"
+        "   - Вдох через нос 5 сек (живот выпячивается)\n"
+        "   - Задержка 5 сек\n"
+        "   - Выдох через рот 5 сек (как будто дуете на свечу)\n"
+        "   - Повторить 5 циклов\n\n"
+        "2. 🧊 «Ледяное заземление»:\n"
+        "   - Возьмите кубик льда в руку\n"
+        "   - Сосредоточьтесь на ощущениях:\n"
+        "     • Сначала холодно\n"
+        "     • Потом покалывает\n"
+        "     • Затем тает и теплеет"
+    ),
+    "high": (
+        "🔍 Срочная помощь при стрессе:\n\n"
+        "1. 🏠 «5-4-3-2-1» (3 минуты):\n"
+        "   - Назовите 5 предметов вокруг\n"
+        "   - 4 вещи, к которым можно прикоснуться\n"
+        "   - 3 звука, которые слышите\n"
+        "   - 2 запаха вокруг\n"
+        "   - 1 вкус во рту\n\n"
+        "2. 🤲 «Безопасное место» (5 минут):\n"
+        "   - Закройте глаза\n"
+        "   - Представьте самое спокойное место\n"
+        "   - Добавьте детали: температура, звуки\n"
+        "   - Дышите глубоко, «побудьте» там"
+    ),
+    "critical": (
+        "🔍 Немедленные действия:\n\n"
+        "1. 📞 Позвоните:\n"
+        "   - 150 (круглосуточная помощь)\n"
+        "   - 112 (экстренные службы)\n\n"
+        "2. 🚶 Физические действия:\n"
+        "   - Медленно походите по комнате\n"
+        "   - Сжимайте-разжимайте кулаки 10 раз\n"
+        "   - Выпейте воды мелкими глотками\n\n"
+        "3. 👥 Контакт с близким:\n"
+        "   - Отправьте сообщение: «Мне плохо»\n"
+        "   - Включите голосовую запись (даже молча)"
+    )
+}
+
+# Техники для панических атак с поддержкой
+PANIC_TECHNIQUES = {
+    0: {
+        "message": (
+            "🌸 *Вы молодцы, что следите за своим состоянием!*\n"
+            "Сейчас всё в порядке, но профилактика никогда не помешает:\n\n"
+            "🧘 **Техника 'Якорение'** (2 минуты):\n"
+            "1. Сядьте удобно, поставьте обе стопы на пол\n"
+            "2. Положите руку на сердце, почувствуйте его ритм\n"
+            "3. Медленно скажите: *«Я в безопасности, я спокоен/спокойна»*\n"
+            "4. Повторите 3 раза, с каждым разом замедляя речь\n\n"
+            "*Вы уже делаете важный шаг к заботе о себе!* 💖"
+        ),
+        "keyboard": main_menu
+    },
+    1: {
+        "message": (
+            "🌿 *Вы справляетесь лучше, чем думаете!*\n"
+            "Небольшая тревога — это нормально. Попробуем эту технику:\n\n"
+            "🔄 **Техника 'Перезагрузка'** (3 минуты):\n"
+            "1. *Вдохните* глубоко через нос (на 4 счёта)\n"
+            "2. *Задержите* дыхание (на 2 счёта)\n"
+            "3. *Выдохните* через сложенные трубочкой губы (на 6 счётов)\n"
+            "4. *Похлопайте* себя по плечам крест-накрест 10 раз\n\n"
+            "*Видите? Вы уже контролируете ситуацию!* 🌈"
+        ),
+        "keyboard": main_menu
+    },
+    2: {
+        "message": (
+            "💪 *Вы сильнее, чем вам кажется!*\n"
+            "Давайте вместе справимся с этим состоянием:\n\n"
+            "❄️ **Техника 'Ледяной щит'** (экстренная):\n"
+            "1. Возьмите *2 кубика льда* (или холодные предметы)\n"
+            "2. Держите в руках, сосредоточьтесь на ощущениях:\n"
+            "   - *«Я чувствую холод»*\n"
+            "   - *«Я чувствую, как лёд тает»*\n"
+            "   - *«Я чувствую возвращение тепла»*\n"
+            "3. Повторите про себя: *«Это пройдет, я в порядке»*\n\n"
+            "*Вы уже молодец, что работаете над своим состоянием!* 🌟"
+        ),
+        "keyboard": ReplyKeyboardMarkup(
+            [["Горячая линия"], ["Я справился(ась)"]],
+            resize_keyboard=True
+        )
+    },
+    3: {
+        "message": (
+            "🛡️ *Вы не одни, я здесь, чтобы помочь!*\n"
+            "Сейчас важно сосредоточиться на дыхании:\n\n"
+            "🎈 **Техника 'Воздушный шар'** (экстренная):\n"
+            "1. *Сядьте на пол*, обопритесь спиной о стену\n"
+            "2. Представьте перед собой *большой воздушный шар*\n"
+            "3. *Медленно надувайте* его в воображении на вдохе (4 сек)\n"
+            "4. *Задержите* дыхание (2 сек)\n"
+            "5. *Сдувайте* шар на выдохе (6 сек)\n"
+            "6. Повторите *5 циклов*, не торопитесь\n\n"
+            "*Вы уже делаете всё правильно!* 💫\n"
+            "Если станет тяжело — сразу нажмите «Горячая линия»"
+        ),
+        "keyboard": ReplyKeyboardMarkup(
+            [["Горячая линия"], ["Я начинаю дышать"]],
+            resize_keyboard=True
+        )
+    }
+}
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Привет! Я бот для работы со стрессом и тревогой. Выберите действие:",
+        reply_markup=main_menu
+    )
+
+
+async def reset_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Удаляем все данные пользователя
+    keys = ['name', 'age', 'medication', 'diagnosis', 'history', 'last_stress_level']
+    for key in keys:
+        if key in context.user_data:
+            del context.user_data[key]
+
+    await update.message.reply_text(
+        "🔁 Все ваши данные были сброшены. Давайте начнем регистрацию заново.\n"
+        "👤 Как вас зовут?",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return NAME
+
+
+async def show_user_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_data = context.user_data
+    if not all(key in user_data for key in ['name', 'age', 'medication', 'diagnosis']):
+        await update.message.reply_text(
+            "👤 Как вас зовут?",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return NAME
+
+    text = (
+        f"📋 Ваши данные:\n\n"
+        f"Имя: {user_data['name']}\n"
+        f"Возраст: {user_data['age']}\n"
+        f"Принимает препараты: {user_data['medication']}\n"
+        f"Медицинские диагнозы: {user_data['diagnosis']}\n\n"
+        f"Вы можете изменить или сбросить данные"
+    )
+
+    await update.message.reply_text(text, reply_markup=edit_data_menu)
+    return ConversationHandler.END
+
+
+async def start_edit_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Что вы хотите изменить?",
+        reply_markup=choose_field_menu
+    )
+    return CHOOSE_FIELD
+
+
+async def choose_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == "Имя":
+        await update.message.reply_text("Введите новое имя:", reply_markup=ReplyKeyboardRemove())
+        return EDIT_NAME
+    elif text == "Возраст":
+        await update.message.reply_text("Выберите возрастную категорию:", reply_markup=age_keyboard)
+        return EDIT_AGE
+    elif text == "Препараты":
+        await update.message.reply_text("Принимаете ли вы препараты?", reply_markup=yes_no_keyboard)
+        return EDIT_MEDICATION
+    elif text == "Диагнозы":
+        await update.message.reply_text("Есть ли медицинские диагнозы?", reply_markup=yes_no_keyboard)
+        return EDIT_DIAGNOSIS
+    else:
+        await update.message.reply_text("Главное меню:", reply_markup=main_menu)
+        return ConversationHandler.END
+
+
+async def edit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['name'] = update.message.text
+    await update.message.reply_text(
+        f"✅ Имя успешно изменено на {update.message.text}!",
+        reply_markup=main_menu
+    )
+    return ConversationHandler.END
+
+
+async def edit_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['age'] = update.message.text
+    await update.message.reply_text(
+        f"✅ Возрастная категория изменена на {update.message.text}!",
+        reply_markup=main_menu
+    )
+    return ConversationHandler.END
+
+
+async def edit_medication(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['medication'] = update.message.text
+    await update.message.reply_text(
+        f"✅ Информация о препаратах обновлена: {update.message.text}!",
+        reply_markup=main_menu
+    )
+    return ConversationHandler.END
+
+
+async def edit_diagnosis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['diagnosis'] = update.message.text
+    await update.message.reply_text(
+        f"✅ Информация о диагнозах обновлена: {update.message.text}!",
+        reply_markup=main_menu
+    )
+    return ConversationHandler.END
+
+
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['name'] = update.message.text
+    await update.message.reply_text(
+        "Выберите возрастную категорию:",
+        reply_markup=age_keyboard
+    )
+    return AGE
+
+
+async def get_age(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['age'] = update.message.text
+    await update.message.reply_text(
+        "Принимаете ли вы препараты (гормоны/антидепрессанты)?",
+        reply_markup=yes_no_keyboard
+    )
+    return MEDICATION
+
+
+async def get_medication(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['medication'] = update.message.text
+    await update.message.reply_text(
+        "Есть ли официальные медицинские диагнозы?",
+        reply_markup=yes_no_keyboard
+    )
+    return DIAGNOSIS
+
+
+async def get_diagnosis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['diagnosis'] = update.message.text
+    name = context.user_data['name']
+    await update.message.reply_text(
+        f"Спасибо, {name}, ваши данные сохранены!",
+        reply_markup=main_menu
+    )
+    return ConversationHandler.END
+
+
+async def handle_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    scores = {"Никогда": 0, "Редко": 1, "Иногда": 2, "Часто": 3, "Постоянно": 4}
+    context.user_data['test_score'] += scores.get(update.message.text, 0)
+    context.user_data['test_step'] += 1
+
+    if context.user_data['test_step'] < TEST_TOTAL:
+        await update.message.reply_text(TEST[context.user_data['test_step']], reply_markup=test_keyboard)
+        return TEST_QUESTIONS
+    else:
+        total = context.user_data['test_score']
+
+        if total <= 5:
+            level = "low"
+        elif total <= 10:
+            level = "medium"
+        elif total <= 15:
+            level = "high"
+        else:
+            level = "critical"
+
+        context.user_data['last_stress_level'] = level
+
+        result_text = f"Результат: {total}/20\n" + STRESS_ADVICE[level]
+
+        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+        history = context.user_data.setdefault("history", [])
+        history.append(f"{timestamp} — {total}/20")
+
+        with open("stress_results.txt", "a", encoding="utf-8") as file:
+            file.write(f"{timestamp} — {update.effective_user.id} — {total}/20\n")
+
+        await update.message.reply_text(
+            result_text + "\n\nХотите подробные рекомендации?",
+            reply_markup=result_keyboard
+        )
+        return ConversationHandler.END
+
+
+async def handle_panic_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if 'panic_test' not in context.user_data:
+        context.user_data['panic_test'] = {'step': 0, 'score': 0}
+
+    if update.message.text in ["Да", "Нет"]:
+        if update.message.text == "Да":
+            context.user_data['panic_test']['score'] += 1
+        context.user_data['panic_test']['step'] += 1
+
+    if context.user_data['panic_test']['step'] < len(PANIC_TEST):
+        await update.message.reply_text(
+            PANIC_TEST[context.user_data['panic_test']['step']],
+            reply_markup=yes_no_keyboard
+        )
+        return TEST_PANIC_QUESTIONS
+    else:
+        score = context.user_data['panic_test']['score']
+        level = min(3, score)  # Определяем уровень от 0 до 3
+
+        # Сохраняем результаты (без показа пользователю)
+        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+        with open("panic_results.txt", "a", encoding="utf-8") as file:
+            file.write(f"{timestamp} — {update.effective_user.id} — {score}\n")
+
+        # Даем соответствующие рекомендации
+        technique = PANIC_TECHNIQUES[level]
+        await update.message.reply_text(
+            technique["message"],
+            reply_markup=technique["keyboard"],
+            parse_mode="Markdown"
+        )
+
+        # Для критического уровня добавляем дополнительную проверку
+        if level >= 2:
+            context.user_data['need_followup'] = True
+        return ConversationHandler.END
+
+
+async def handle_followup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == "Я начинаю дышать":
+        await update.message.reply_text(
+            "👍 Отлично! Продолжайте дышать в том же ритме. "
+            "С каждым выдохом тревога уменьшается. "
+            "Вы замечательно справляетесь! Через 2 минуты я проверю, как вы себя чувствуете.",
+            reply_markup=ReplyKeyboardMarkup(
+                [["Стало лучше"], ["Все еще тяжело"]],
+                resize_keyboard=True
+            )
+        )
+    elif text == "Я справился(ась)":
+        await update.message.reply_text(
+            "🎉 Я горжусь вами! Это было непросто, но вы смогли! "
+            "Обязательно похвалите себя за эту победу.",
+            reply_markup=main_menu
+        )
+    elif text == "Стало лучше":
+        await update.message.reply_text(
+            "🌤️ Прекрасные новости! Вы большая умничка! "
+            "Помните — это состояние временное, а вы сильнее, чем думаете.",
+            reply_markup=main_menu
+        )
+    elif text == "Все еще тяжело":
+        await update.message.reply_text(
+            "🆘 Пожалуйста, позвоните на горячую линию 150. "
+            "Вы не одни, и помощь уже рядом. Я остаюсь с вами.",
+            reply_markup=ReplyKeyboardMarkup(
+                [["Горячая линия"], ["Я позвонил(а)"]],
+                resize_keyboard=True
+            )
+        )
+    elif text == "Я позвонил(а)":
+        await update.message.reply_text(
+            "💙 Вы сделали правильный выбор. Специалисты помогут вам. "
+            "Я здесь, если вам нужно будет поговорить позже.",
+            reply_markup=main_menu
+        )
+    return ConversationHandler.END
+
+
+async def extended_advice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    level = context.user_data.get('last_stress_level')
+    if level in EXTENDED_ADVICE:
+        await update.message.reply_text(
+            EXTENDED_ADVICE[level],
+            reply_markup=result_keyboard
+        )
+    else:
+        await update.message.reply_text(
+            "Сначала пройдите тест для получения рекомендаций",
+            reply_markup=main_menu
+        )
+
+
+async def share_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+
+    if text == "Вернуться в меню":
+        await update.message.reply_text(
+            "Возвращаемся в главное меню.",
+            reply_markup=main_menu
+        )
+        return ConversationHandler.END
+
+    # Сохраняем сообщение пользователя
+    timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+    with open("user_experiences.txt", "a", encoding="utf-8") as file:
+        file.write(f"{timestamp} — {update.effective_user.id} — {text}\n")
+
+    await update.message.reply_text(
+        "Спасибо, что поделились. Ваши переживания важны.\n"
+        "Можете продолжить или вернуться в меню.",
+        reply_markup=ReplyKeyboardMarkup(
+            [["Вернуться в меню"]],
+            resize_keyboard=True
+        )
+    )
+    return SHARE_EXPERIENCE
+
+
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+
+    if text == "Вернуться в меню":
+        await update.message.reply_text(
+            "Главное меню:",
+            reply_markup=main_menu
+        )
+        return ConversationHandler.END
+
+    elif text == "Рассказать о себе":
+        return await show_user_data(update, context)
+
+    elif text == "Изменить данные":
+        return await start_edit_data(update, context)
+
+    elif text == "Сбросить данные":
+        return await reset_data(update, context)
+
+    elif text == "Пройти тест уровня стресса":
+        context.user_data['test_step'] = 0
+        context.user_data['test_score'] = 0
+        await update.message.reply_text(
+            "Начнём тест. Отвечайте честно:",
+            reply_markup=test_keyboard
+        )
+        await update.message.reply_text(TEST[0])
+        return TEST_QUESTIONS
+
+    elif text == "Расскажи побольше":
+        return await extended_advice(update, context)
+
+    elif text == "Выговориться":
+        await update.message.reply_text(
+            "💬 Напишите всё, что вас беспокоит. Я внимательно выслушаю:",
+            reply_markup=ReplyKeyboardMarkup(
+                [["Вернуться в меню"]],
+                resize_keyboard=True
+            )
+        )
+        return SHARE_EXPERIENCE
+
+    elif text == "Мои результаты уровня стресса":
+        history = context.user_data.get("history", [])
+        if not history:
+            await update.message.reply_text("❗️Вы ещё не проходили тест.", reply_markup=main_menu)
+        else:
+            await update.message.reply_text("📊 Ваши результаты:\n" + "\n".join(history), reply_markup=main_menu)
+        return ConversationHandler.END
+
+    elif text == "Срочная помощь":
+        await update.message.reply_text(
+            "Сейчас проведем быстрый тест (5 вопросов), чтобы подобрать лучшую технику помощи.\n"
+            "Отвечайте «Да» или «Нет»:",
+            reply_markup=yes_no_keyboard
+        )
+        context.user_data['panic_test'] = {'step': 0, 'score': 0}
+        await update.message.reply_text(PANIC_TEST[0], reply_markup=yes_no_keyboard)
+        return TEST_PANIC_QUESTIONS
+
+    elif text == "Горячая линия":
+        await update.message.reply_text(
+            "📞 Телефоны помощи:\n\n"
+            "• Кризисная линия: 150 (круглосуточно)\n"
+            "• Для детей: 8-800-2000-122\n"
+            "• Психологи МЧС: 8-495-989-50-50\n\n"
+            "Не стесняйтесь обращаться за помощью!",
+            reply_markup=main_menu
+        )
+        return ConversationHandler.END
+
+    else:
+        await update.message.reply_text("Пожалуйста, выберите действие из меню.", reply_markup=main_menu)
+        return ConversationHandler.END
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Действие отменено.",
+        reply_markup=main_menu
+    )
+    return ConversationHandler.END
+
+
+def main():
+    application = ApplicationBuilder().token("7769281721:AAGvoXvz7GM4dgL0boz0KOh_RagRASJ0AAc").build()
+
+    # Обработчики диалогов
+    info_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Рассказать о себе$"), handle_menu)],
+        states={
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            AGE: [MessageHandler(filters.Regex("^(12-18|19-25|26-35|36-45|46-60)$"), get_age)],
+            MEDICATION: [MessageHandler(filters.Regex("^(Да|Нет)$"), get_medication)],
+            DIAGNOSIS: [MessageHandler(filters.Regex("^(Да|Нет)$"), get_diagnosis)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    reset_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Сбросить данные$"), reset_data)],
+        states={
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            AGE: [MessageHandler(filters.Regex("^(12-18|19-25|26-35|36-45|46-60)$"), get_age)],
+            MEDICATION: [MessageHandler(filters.Regex("^(Да|Нет)$"), get_medication)],
+            DIAGNOSIS: [MessageHandler(filters.Regex("^(Да|Нет)$"), get_diagnosis)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    test_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Пройти тест уровня стресса$"), handle_menu)],
+        states={
+            TEST_QUESTIONS: [MessageHandler(filters.Regex("^(Никогда|Редко|Иногда|Часто|Постоянно)$"), handle_test)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    panic_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Срочная помощь$"), handle_menu)],
+        states={
+            TEST_PANIC_QUESTIONS: [MessageHandler(filters.Regex("^(Да|Нет)$"), handle_panic_test)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    share_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Выговориться$"), handle_menu)],
+        states={
+            SHARE_EXPERIENCE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, share_experience),
+                MessageHandler(filters.Regex("^Вернуться в меню$"), handle_menu)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    edit_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Изменить данные$"), start_edit_data)],
+        states={
+            CHOOSE_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_field)],
+            EDIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_name)],
+            EDIT_AGE: [MessageHandler(filters.Regex("^(12-18|19-25|26-35|36-45|46-60)$"), edit_age)],
+            EDIT_MEDICATION: [MessageHandler(filters.Regex("^(Да|Нет)$"), edit_medication)],
+            EDIT_DIAGNOSIS: [MessageHandler(filters.Regex("^(Да|Нет)$"), edit_diagnosis)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    followup_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(
+                filters.Regex("^(Я начинаю дышать|Я справился\(ась\)|Стало лучше|Все еще тяжело|Я позвонил\(а\))$"),
+                handle_followup)
+        ],
+        states={},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    # Регистрация обработчиков
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(info_conv)
+    application.add_handler(reset_conv)
+    application.add_handler(test_conv)
+    application.add_handler(panic_conv)
+    application.add_handler(share_conv)
+    application.add_handler(edit_conv)
+    application.add_handler(followup_conv)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
+
+    # Запуск бота
+    application.run_polling()
+
+
+if __name__ == "__main__":
+    main()
