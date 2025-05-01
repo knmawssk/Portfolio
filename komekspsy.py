@@ -1518,7 +1518,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    application = ApplicationBuilder().token("7769281721:AAGvoXvz7GM4dgL0boz0KOh_RagRASJ0AAc").build()
+    application = ApplicationBuilder().token("MYTOKEN").build()
 
     info_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Рассказать о себе$"), handle_menu)],
